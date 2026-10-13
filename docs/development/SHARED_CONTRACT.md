@@ -61,7 +61,7 @@ Chamadas de rede têm autenticação de membro e `protocol_version=1`.
 
 - `Lease`: `world_id`, `session_id` aleatório, `owner_id` autenticado,
   `fence` inteiro estritamente crescente por mundo, `expires_at` UTC do serviço,
-  `base_version`, `lease_secret` não exposto em status. Transporte de fence/versão
+  `base_version`, `renewal_seq` (inicialmente 0), `lease_secret` não exposto em status. Transporte de fence/versão
   como string decimal se o runtime não representar int64 exatamente.
 - `Head`: `world_id`, `version`, `snapshot_id`, `sha256`, `size_bytes`,
   `layout_id`, `slot`, `server_build`. Um download é sempre fixado nesse head.
@@ -98,7 +98,7 @@ mutação de sessão exige owner + session_id + lease_secret + fence atuais e
 | Operação | Entrada e saída | Condição/efeito e erros específicos |
 | --- | --- | --- |
 | `acquire(world_id, request_id)` | Retorna Lease + Head + server_time | IDLE com head válido -> STARTING. Incrementa fence e fixa base_version atomicamente. Concorrente perde com BUSY; bloqueio retorna RECOVERY_REQUIRED. Não cria mundo implicitamente. |
-| `heartbeat(lease, request_id)` | Lease com nova validade + estado | Renova STARTING/ACTIVE/FINALIZING. Nunca ressuscita expirado; LEASE_EXPIRED/FENCED/INVALID_STATE. |
+| `heartbeat(lease, request_id)` | Lease com nova validade + estado + server_time | Renova STARTING/ACTIVE/FINALIZING. Nunca ressuscita expirado; LEASE_EXPIRED/FENCED/INVALID_STATE. |
 | `activate(lease, game_id, request_id)` | Status ACTIVE | Só STARTING, após B confirmar ready da mesma session_id. Anuncia ID; vazio/inválido rejeitado. ID não é credencial para publicação. |
 | `status(world_id, request_id=None)` | Status, e recibo se solicitado/autorizado | Leitura consistente do coordenador; aplica expiração lógica antes de responder. Ausência de resposta significa indisponível. |
 | `begin_finalize(lease, request_id)` | Status FINALIZING | STARTING ou ACTIVE -> FINALIZING; retira Game ID de descoberta. Retry idêntico é seguro. Não libera owner nem para o processo por si. |
@@ -114,7 +114,10 @@ nova sessão. Retries consultam recibo, nunca liberam "o owner atual" por world_
 Retenção mínima: recibos terminais de aquisição/cancelamento/publicação e
 tombstones das sessões ficam enquanto o mundo existir, sem um sistema de GC
 nesta primeira versão. Para heartbeat basta guardar o último ID/recibo e a
-sequência, rejeitando anteriores. Repetir acquire de sessão encerrada retorna
+sequência, rejeitando anteriores. O cliente envia a renewal_seq recebida; cada
+renovação nova exige igualdade com a persistida e incrementa uma vez. Apenas um
+heartbeat fica em voo por sessão; retry do último request_id recupera a resposta
+sem incrementar. Repetir acquire de sessão encerrada retorna
 seu resultado histórico/encerrado, nunca um lease utilizável nem nova aquisição.
 
 ## Estados e tempo
